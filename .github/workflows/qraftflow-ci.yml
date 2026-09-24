@@ -55,6 +55,8 @@ jobs:
           token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
           persist-credentials: false
           fetch-depth: 1
+      - name: Mark checkout as safe for git inside container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Validate baseline and traceability
         run: ./scripts/check.sh
       - name: Validate release manifest generation

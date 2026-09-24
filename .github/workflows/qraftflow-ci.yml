@@ -1,0 +1,151 @@
+name: QraftFlow Public CI
+
+on:
+  push:
+    paths:
+      - "ci-requests/**"
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact QraftFlow-Creator-OS commit SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qraftflow-ci-${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: yxlnetcom/QraftFlow-Creator-OS
+
+jobs:
+  resolve-source:
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            SHA="${{ inputs.source_sha }}"
+          else
+            REQUEST_FILE="$(find ci-requests -maxdepth 1 -type f -name '*.txt' | sort | tail -n 1)"
+            test -n "$REQUEST_FILE"
+            SHA="$(tr -d '[:space:]' < "$REQUEST_FILE")"
+          fi
+          [[ "$SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          echo "source_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Validating source SHA: ${SHA:0:12}..."
+
+  repository-checks:
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    container: swift:5.10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate baseline and traceability
+        run: ./scripts/check.sh
+      - name: Validate release manifest generation
+        run: ./scripts/test_release_manifest.sh
+      - name: Check whitespace
+        run: git diff-tree --check --root --no-commit-id HEAD
+
+  swift-linux:
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    container: swift:5.10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install Linux test dependencies
+        run: |
+          apt-get update
+          apt-get install -y libsqlite3-dev zip unzip
+      - name: Record Swift toolchain
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Test regression suite
+        run: swift test
+      - name: Verify milestone test discovery
+        run: |
+          swift test list | grep -F M3AgentOrchestrationTests
+          swift test list | grep -F M4DeliveryOrchestrationTests
+          swift test list | grep -F M5AppSupportTests
+
+  swift-macos:
+    needs: resolve-source
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Record build environment
+        run: |
+          swift --version
+          xcodebuild -version
+          uname -m
+          sw_vers
+      - name: Build
+        run: swift build
+      - name: Test regression suite
+        run: swift test
+      - name: Confirm package declares macOS 12
+        run: grep -F '.macOS(.v12)' Package.swift
+      - name: Validate release scripts
+        run: bash -n scripts/build_app.sh scripts/package_dmg.sh scripts/release_manifest.sh scripts/notarize.sh
+
+  macos-app-package:
+    needs: resolve-source
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Build unsigned Universal 2 app
+        run: ./scripts/build_app.sh
+      - name: Validate app bundle
+        run: |
+          APP='dist/QraftFlow Creator OS.app'
+          test -x "$APP/Contents/MacOS/QraftFlow Creator OS"
+          test -x "$APP/Contents/MacOS/qraftflow-local"
+          test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = com.qt.qraftflow
+          test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = 12.0
+          "$APP/Contents/MacOS/QraftFlow Creator OS" --version
+      - name: Package and verify DMG
+        run: ./scripts/package_dmg.sh
+      - name: Install-layout smoke test
+        run: |
+          DMG=$(find dist -maxdepth 1 -name '*.dmg' -print -quit)
+          MOUNT=$(mktemp -d)
+          hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT" "$DMG"
+          test -d "$MOUNT/QraftFlow Creator OS.app"
+          test -L "$MOUNT/Applications"
+          hdiutil detach -quiet "$MOUNT"
+          test -s dist/release-manifest.json
+          test -s dist/SHA256SUMS.txt

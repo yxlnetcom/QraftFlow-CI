@@ -43,6 +43,24 @@ jobs:
           echo "source_sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Validating source SHA: ${SHA:0:12}..."
 
+  web-syntax:
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Record Node version
+        run: node --version
+      - name: Validate browser JavaScript syntax
+        run: |
+          node --check Sources/QraftFlowLocalServer/Web/app.js
+          node --check Sources/QraftFlowLocalServer/Web/sw.js
+
   repository-checks:
     needs: resolve-source
     runs-on: ubuntu-latest
@@ -57,11 +75,6 @@ jobs:
           fetch-depth: 1
       - name: Mark checkout as safe for git inside container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Install JavaScript syntax checker
-        run: |
-          apt-get update
-          apt-get install -y nodejs
-          node --version
       - name: Validate baseline and traceability
         run: ./scripts/check.sh
       - name: Validate release manifest generation

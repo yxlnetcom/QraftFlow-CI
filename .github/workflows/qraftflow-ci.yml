@@ -35,8 +35,9 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             SHA="${{ inputs.source_sha }}"
           else
-            REQUEST_FILE="$(find ci-requests -maxdepth 1 -type f -name '*.txt' | sort | tail -n 1)"
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" -- 'ci-requests/*.txt' | tail -n 1)"
             test -n "$REQUEST_FILE"
+            test -f "$REQUEST_FILE"
             SHA="$(tr -d '[:space:]' < "$REQUEST_FILE")"
           fi
           [[ "$SHA" =~ ^[0-9a-fA-F]{40}$ ]]

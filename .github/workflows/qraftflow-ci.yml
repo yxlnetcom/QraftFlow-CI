@@ -35,17 +35,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             SHA="${{ inputs.source_sha }}"
           else
-            REQUEST_FILE="$(python3 - "$GITHUB_EVENT_PATH" <<'PY'
-import json, sys
-with open(sys.argv[1], 'r', encoding='utf-8') as f:
-    event=json.load(f)
-paths=(event.get('head_commit') or {}).get('added', []) + (event.get('head_commit') or {}).get('modified', [])
-matches=[p for p in paths if p.startswith('ci-requests/') and p.endswith('.txt')]
-if len(matches) != 1:
-    raise SystemExit(f'expected exactly one CI request in triggering commit, got: {matches}')
-print(matches[0])
-PY
-)"
+            REQUEST_FILE='${{ github.event.head_commit.added[0] }}'
+            test -n "$REQUEST_FILE"
             test -f "$REQUEST_FILE"
             SHA="$(tr -d '[:space:]' < "$REQUEST_FILE")"
           fi

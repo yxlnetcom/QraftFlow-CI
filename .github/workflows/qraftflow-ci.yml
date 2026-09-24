@@ -60,6 +60,34 @@ jobs:
         run: |
           node --check Sources/QraftFlowLocalServer/Web/app.js
           node --check Sources/QraftFlowLocalServer/Web/sw.js
+      - name: Validate browser bootstrap
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),vm=require('vm');
+          const src=fs.readFileSync('Sources/QraftFlowLocalServer/Web/app.js','utf8');
+          const store=()=>{const m=new Map();return{getItem:k=>m.has(k)?m.get(k):null,setItem:(k,v)=>m.set(k,String(v)),removeItem:k=>m.delete(k)}};
+          const elements={};
+          for(const id of ['language','language-label','token','connect','title','hint','content'])elements[id]={value:'',textContent:'',placeholder:'',innerHTML:'',dataset:{},style:{},classList:{add(){},remove(){},contains(){return false}},addEventListener(){},querySelector(){return null}};
+          const buttons=['projects','briefs','tasks','assets','notes','publishing'].map(view=>({dataset:{view},textContent:''}));
+          const document={documentElement:{lang:''},getElementById:id=>elements[id]||null,querySelectorAll:s=>s==='nav button'?buttons:[],addEventListener(){},createElement(){return{style:{},dataset:{},classList:{add(){},remove(){}},appendChild(){},querySelector(){return null},addEventListener(){},click(){}}},body:{appendChild(){}}};
+          const context={
+            window:{crypto:{randomUUID:()=> '00000000-0000-4000-8000-000000000000'},addEventListener(){},scrollY:0,scrollTo(){}},
+            document,
+            localStorage:store(),
+            sessionStorage:store(),
+            navigator:{},
+            fetch:async()=>({ok:true,json:async()=>[]}),
+            performance:{now:()=>0},
+            requestAnimationFrame:fn=>fn(),
+            scrollTo(){},
+            URL:{createObjectURL:()=>'',revokeObjectURL(){}},
+            setTimeout,clearTimeout,console
+          };
+          vm.runInNewContext(src,context,{filename:'app.js'});
+          if(buttons.some(b=>!b.textContent))throw new Error('browser bootstrap failed: empty navigation label');
+          console.log('browser bootstrap ok:',buttons.map(b=>b.textContent).join(' | '));
+          NODE
 
   repository-checks:
     needs: resolve-source

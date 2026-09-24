@@ -28,6 +28,8 @@ jobs:
       source_sha: ${{ steps.resolve.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - id: resolve
         shell: bash
         run: |
@@ -35,7 +37,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             SHA="${{ inputs.source_sha }}"
           else
-            REQUEST_FILE='${{ github.event.head_commit.added[0] }}'
+            REQUEST_FILE="$(git diff --name-only HEAD^ HEAD -- 'ci-requests/*.txt' | tail -n 1)"
             test -n "$REQUEST_FILE"
             test -f "$REQUEST_FILE"
             SHA="$(tr -d '[:space:]' < "$REQUEST_FILE")"

@@ -57,6 +57,11 @@ jobs:
           fetch-depth: 1
       - name: Mark checkout as safe for git inside container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install JavaScript syntax checker
+        run: |
+          apt-get update
+          apt-get install -y nodejs
+          node --version
       - name: Validate baseline and traceability
         run: ./scripts/check.sh
       - name: Validate release manifest generation

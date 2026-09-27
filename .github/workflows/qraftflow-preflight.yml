@@ -1,0 +1,167 @@
+name: QraftFlow Candidate Preflight (not authoritative CI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      BASE_SHA:
+        description: Exact private source baseline commit SHA
+        required: true
+        type: string
+      CANDIDATE_TREE_SHA:
+        description: Complete unpublished candidate Git tree SHA
+        required: true
+        type: string
+      BATCH_ID:
+        description: Approved coherent batch ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qraftflow-preflight-${{ inputs.BATCH_ID }}-${{ inputs.CANDIDATE_TREE_SHA }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: yxlnetcom/QraftFlow-Creator-OS
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate non-secret dispatch identifiers
+        shell: bash
+        env:
+          BASE_SHA: ${{ inputs.BASE_SHA }}
+          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
+          BATCH_ID: ${{ inputs.BATCH_ID }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_TREE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_SHA" == fb27377988179da6076fef5107dcba87d1f1980d ]]
+          [[ "$BATCH_ID" == F01-F07-20260928 ]]
+          echo 'INPUT_VALIDATION PASS'
+
+  p0-delivery:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted public preflight control code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: control
+      - name: Trusted script static self-test
+        run: python3 control/scripts/preflight_restore.py selftest
+      - name: Checkout exact private baseline; do not persist credentials
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.BASE_SHA }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: source
+      - name: Restore and verify candidate snapshot (token scoped to this step)
+        shell: bash
+        env:
+          QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          BASE_SHA: ${{ inputs.BASE_SHA }}
+          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
+          BATCH_ID: ${{ inputs.BATCH_ID }}
+        run: |
+          set -euo pipefail
+          python3 control/scripts/preflight_restore.py restore \
+            --base-sha "$BASE_SHA" \
+            --candidate-tree-sha "$CANDIDATE_TREE_SHA" \
+            --batch-id "$BATCH_ID" \
+            --workspace source
+      - name: Prove read-token absence in later steps
+        run: python3 control/scripts/preflight_restore.py audit --workspace source
+
+  p1-linux:
+    needs: p0-delivery
+    runs-on: ubuntu-latest
+    container: swift:5.10
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted public preflight control code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: control
+      - name: Install Linux test dependencies
+        run: |
+          apt-get update >/dev/null 2>&1
+          apt-get install -y libsqlite3-dev zip unzip nodejs python3 >/dev/null 2>&1
+      - name: Checkout exact private baseline; do not persist credentials
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.BASE_SHA }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: source
+      - name: Mark container checkout safe for local Git verification
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/source"
+      - name: Independently restore full candidate; token scoped to this step
+        shell: bash
+        env:
+          QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          BASE_SHA: ${{ inputs.BASE_SHA }}
+          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
+          BATCH_ID: ${{ inputs.BATCH_ID }}
+        run: |
+          set -euo pipefail
+          python3 control/scripts/preflight_restore.py restore --base-sha "$BASE_SHA" \
+            --candidate-tree-sha "$CANDIDATE_TREE_SHA" --batch-id "$BATCH_ID" --workspace source
+      - name: Check token separation and test real Linux candidate
+        run: |
+          set -euo pipefail
+          python3 control/scripts/preflight_restore.py audit --workspace source
+          swift --version
+          python3 control/scripts/preflight_restore.py test --workspace source --platform linux
+
+  p1-macos:
+    needs: p0-delivery
+    runs-on: macos-14
+    timeout-minutes: 75
+    steps:
+      - name: Checkout trusted public preflight control code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: control
+      - name: Checkout exact private baseline; do not persist credentials
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.BASE_SHA }}
+          token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: source
+      - name: Independently restore full candidate; token scoped to this step
+        shell: bash
+        env:
+          QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
+          BASE_SHA: ${{ inputs.BASE_SHA }}
+          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
+          BATCH_ID: ${{ inputs.BATCH_ID }}
+        run: |
+          set -euo pipefail
+          python3 control/scripts/preflight_restore.py restore --base-sha "$BASE_SHA" \
+            --candidate-tree-sha "$CANDIDATE_TREE_SHA" --batch-id "$BATCH_ID" --workspace source
+      - name: Check token separation and test real macOS candidate
+        run: |
+          set -euo pipefail
+          python3 control/scripts/preflight_restore.py audit --workspace source
+          swift --version
+          xcodebuild -version
+          uname -m
+          sw_vers
+          python3 control/scripts/preflight_restore.py test --workspace source --platform macos

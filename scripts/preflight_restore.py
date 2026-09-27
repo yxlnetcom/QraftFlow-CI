@@ -83,7 +83,17 @@ def get_entries(tree):
     return entries
 
 def check_scope(before, after):
-    changed = {p for p in before.keys() | after.keys() if before.get(p) != after.get(p)}
+    # Git changes parent directory tree SHAs when descendants change. Scope
+    # comparison applies to BLOB paths, while directory path/type/mode sets
+    # must stay identical. Otherwise a valid 13-file tree would be rejected.
+    before_dirs = {p for p, e in before.items() if e[0] == "tree"}
+    after_dirs = {p for p, e in after.items() if e[0] == "tree"}
+    if before_dirs != after_dirs:
+        raise ValueError("unexpected directory addition/deletion")
+    before_blobs = {p: e for p, e in before.items() if e[0] == "blob"}
+    after_blobs = {p: e for p, e in after.items() if e[0] == "blob"}
+    changed = {p for p in before_blobs.keys() | after_blobs.keys()
+               if before_blobs.get(p) != after_blobs.get(p)}
     if changed != set(POLICY) or len(changed) != 13:
         raise ValueError("candidate scope mismatch")
     for p, (old, new) in POLICY.items():
@@ -232,7 +242,11 @@ def selftest():
     after = dict(before)
     for p, (_, target) in POLICY.items(): after[p] = ("blob", "100644", target)
     check_scope(before, after)
-    for invalid in (dict(after, extra=("blob", "100644", "a" * 40)), dict(after, **{next(iter(POLICY)): ("blob", "120000", "a" * 40)})):
+    # Changed parent tree hashes are legitimate; directory structure changes are not.
+    before["Sources"] = ("tree", "040000", "a" * 40)
+    after["Sources"] = ("tree", "040000", "b" * 40)
+    check_scope(before, after)
+    for invalid in (dict(after, extra=("blob", "100644", "a" * 40)), dict(after, **{next(iter(POLICY)): ("blob", "120000", "a" * 40)}), dict(after, **{"unexpected-folder": ("tree", "040000", "a" * 40)})):
         try: check_scope(before, invalid)
         except ValueError: pass
         else: raise ValueError("unapproved candidate accepted")

@@ -1,6 +1,10 @@
 name: QraftFlow Candidate Preflight (not authoritative CI)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'preflight-requests/**'
   workflow_dispatch:
     inputs:
       BASE_SHA:
@@ -15,12 +19,18 @@ on:
         description: Approved coherent batch ID
         required: true
         type: string
+      STAGE:
+        description: Preflight stage; P0_ONLY does not schedule P1
+        required: true
+        type: choice
+        options: [P0_ONLY, FULL]
+        default: P0_ONLY
 
 permissions:
   contents: read
 
 concurrency:
-  group: qraftflow-preflight-${{ inputs.BATCH_ID }}-${{ inputs.CANDIDATE_TREE_SHA }}
+  group: qraftflow-preflight-${{ github.event_name == 'push' && github.sha || inputs.CANDIDATE_TREE_SHA }}
   cancel-in-progress: false
 
 env:
@@ -29,19 +39,70 @@ env:
 jobs:
   validate-inputs:
     runs-on: ubuntu-latest
+    outputs:
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      candidate_tree_sha: ${{ steps.resolve.outputs.candidate_tree_sha }}
+      batch_id: ${{ steps.resolve.outputs.batch_id }}
+      stage: ${{ steps.resolve.outputs.stage }}
     steps:
-      - name: Validate non-secret dispatch identifiers
+      - name: Checkout trusted public request metadata
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          path: control
+      - name: Validate event, approved source, immutable request and fixed identifiers
+        id: resolve
         shell: bash
         env:
-          BASE_SHA: ${{ inputs.BASE_SHA }}
-          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
-          BATCH_ID: ${{ inputs.BATCH_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_SENDER: ${{ github.event.sender.login }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.sha }}
+          EVENT_FORCED: ${{ github.event.forced }}
+          EVENT_CREATED: ${{ github.event.created }}
+          EVENT_DELETED: ${{ github.event.deleted }}
+          INPUT_BASE_SHA: ${{ inputs.BASE_SHA }}
+          INPUT_CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
+          INPUT_BATCH_ID: ${{ inputs.BATCH_ID }}
+          INPUT_STAGE: ${{ inputs.STAGE }}
         run: |
           set -euo pipefail
-          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$CANDIDATE_TREE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$BASE_SHA" == fb27377988179da6076fef5107dcba87d1f1980d ]]
-          [[ "$BATCH_ID" == F01-F07-20260928 ]]
+          BASE='fb27377988179da6076fef5107dcba87d1f1980d'
+          TREE='17acddb1d3eef9be95238d0cd38253fb88cc142b'
+          BATCH='F01-F07-20260928'
+          REQUEST='preflight-requests/F01-F07-20260928-p0.txt'
+          if [[ "$EVENT_NAME" == 'push' ]]; then
+            [[ "$EVENT_REF" == 'refs/heads/main' ]]
+            [[ "$EVENT_ACTOR" == 'yxlnetcom' && "$EVENT_SENDER" == 'yxlnetcom' ]]
+            [[ "$EVENT_FORCED" != 'true' && "$EVENT_CREATED" != 'true' && "$EVENT_DELETED" != 'true' ]]
+            [[ "$EVENT_BEFORE" =~ ^[0-9a-f]{40}$ && "$EVENT_AFTER" =~ ^[0-9a-f]{40}$ ]]
+            cd control
+            [[ "$(git rev-parse HEAD)" == "$EVENT_AFTER" ]]
+            [[ "$(git rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" == '2' ]]
+            [[ "$(git rev-parse HEAD^)" == "$EVENT_BEFORE" ]]
+            # Exactly one newly added, fixed-name request. Reject mixed source/workflow edits.
+            [[ "$(git diff-tree --no-commit-id --name-status -r HEAD^ HEAD)" == $'A\t'"$REQUEST" ]]
+            [[ -f "$REQUEST" && ! -L "$REQUEST" ]]
+            expected=$(mktemp)
+            trap 'rm -f "$expected"' EXIT
+            printf 'BASE_SHA=%s\nCANDIDATE_TREE_SHA=%s\nBATCH_ID=%s\n' "$BASE" "$TREE" "$BATCH" > "$expected"
+            cmp -s "$expected" "$REQUEST"
+            stage='P0_ONLY'
+          elif [[ "$EVENT_NAME" == 'workflow_dispatch' ]]; then
+            [[ "$EVENT_REF" == 'refs/heads/main' ]]
+            [[ "$EVENT_ACTOR" == 'yxlnetcom' && "$EVENT_SENDER" == 'yxlnetcom' ]]
+            [[ "$INPUT_BASE_SHA" =~ ^[0-9a-f]{40}$ && "$INPUT_CANDIDATE_TREE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$INPUT_BASE_SHA" == "$BASE" && "$INPUT_CANDIDATE_TREE_SHA" == "$TREE" && "$INPUT_BATCH_ID" == "$BATCH" ]]
+            [[ "$INPUT_STAGE" == 'P0_ONLY' || "$INPUT_STAGE" == 'FULL' ]]
+            stage="$INPUT_STAGE"
+          else
+            exit 1
+          fi
+          printf 'base_sha=%s\ncandidate_tree_sha=%s\nbatch_id=%s\nstage=%s\n' "$BASE" "$TREE" "$BATCH" "$stage" >> "$GITHUB_OUTPUT"
           echo 'INPUT_VALIDATION PASS'
 
   p0-delivery:
@@ -60,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
-          ref: ${{ inputs.BASE_SHA }}
+          ref: ${{ needs.validate-inputs.outputs.base_sha }}
           token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
           persist-credentials: false
           fetch-depth: 1
@@ -69,9 +130,9 @@ jobs:
         shell: bash
         env:
           QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
-          BASE_SHA: ${{ inputs.BASE_SHA }}
-          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
-          BATCH_ID: ${{ inputs.BATCH_ID }}
+          BASE_SHA: ${{ needs.validate-inputs.outputs.base_sha }}
+          CANDIDATE_TREE_SHA: ${{ needs.validate-inputs.outputs.candidate_tree_sha }}
+          BATCH_ID: ${{ needs.validate-inputs.outputs.batch_id }}
         run: |
           set -euo pipefail
           python3 control/scripts/preflight_restore.py restore \
@@ -83,7 +144,8 @@ jobs:
         run: python3 control/scripts/preflight_restore.py audit --workspace source
 
   p1-linux:
-    needs: p0-delivery
+    needs: [validate-inputs, p0-delivery]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.validate-inputs.outputs.stage == 'FULL' && needs.p0-delivery.result == 'success' }}
     runs-on: ubuntu-latest
     container: swift:5.10
     timeout-minutes: 60
@@ -101,7 +163,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
-          ref: ${{ inputs.BASE_SHA }}
+          ref: ${{ needs.validate-inputs.outputs.base_sha }}
           token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
           persist-credentials: false
           fetch-depth: 1
@@ -112,9 +174,9 @@ jobs:
         shell: bash
         env:
           QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
-          BASE_SHA: ${{ inputs.BASE_SHA }}
-          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
-          BATCH_ID: ${{ inputs.BATCH_ID }}
+          BASE_SHA: ${{ needs.validate-inputs.outputs.base_sha }}
+          CANDIDATE_TREE_SHA: ${{ needs.validate-inputs.outputs.candidate_tree_sha }}
+          BATCH_ID: ${{ needs.validate-inputs.outputs.batch_id }}
         run: |
           set -euo pipefail
           python3 control/scripts/preflight_restore.py restore --base-sha "$BASE_SHA" \
@@ -127,7 +189,8 @@ jobs:
           python3 control/scripts/preflight_restore.py test --workspace source --platform linux
 
   p1-macos:
-    needs: p0-delivery
+    needs: [validate-inputs, p0-delivery]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.validate-inputs.outputs.stage == 'FULL' && needs.p0-delivery.result == 'success' }}
     runs-on: macos-14
     timeout-minutes: 75
     steps:
@@ -140,7 +203,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
-          ref: ${{ inputs.BASE_SHA }}
+          ref: ${{ needs.validate-inputs.outputs.base_sha }}
           token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
           persist-credentials: false
           fetch-depth: 1
@@ -149,9 +212,9 @@ jobs:
         shell: bash
         env:
           QF_PREFLIGHT_READ_TOKEN: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
-          BASE_SHA: ${{ inputs.BASE_SHA }}
-          CANDIDATE_TREE_SHA: ${{ inputs.CANDIDATE_TREE_SHA }}
-          BATCH_ID: ${{ inputs.BATCH_ID }}
+          BASE_SHA: ${{ needs.validate-inputs.outputs.base_sha }}
+          CANDIDATE_TREE_SHA: ${{ needs.validate-inputs.outputs.candidate_tree_sha }}
+          BATCH_ID: ${{ needs.validate-inputs.outputs.batch_id }}
         run: |
           set -euo pipefail
           python3 control/scripts/preflight_restore.py restore --base-sha "$BASE_SHA" \

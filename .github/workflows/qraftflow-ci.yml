@@ -91,6 +91,12 @@ jobs:
           if(buttons.some(b=>!b.textContent))throw new Error('browser bootstrap failed: empty navigation label');
           console.log('browser bootstrap ok:',buttons.map(b=>b.textContent).join(' | '));
           NODE
+      - name: Validate real browser auth and responsive connection behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser
+          python3 scripts/test_auth_connection_browser.py
 
   repository-checks:
     needs: resolve-source

@@ -134,13 +134,15 @@ jobs:
       - name: Install Linux test dependencies
         run: |
           apt-get update
-          apt-get install -y libsqlite3-dev zip unzip
+          apt-get install -y libsqlite3-dev zip unzip python3
       - name: Record Swift toolchain
         run: swift --version
       - name: Build
         run: swift build
       - name: Test regression suite
         run: swift test
+      - name: Verify actual local server serves exact UI shell
+        run: python3 scripts/test_served_ui_exact.py
       - name: Verify milestone test discovery
         run: |
           swift test list | grep -F M3AgentOrchestrationTests
@@ -168,6 +170,8 @@ jobs:
         run: swift build
       - name: Test regression suite
         run: swift test
+      - name: Verify actual local server serves exact UI shell
+        run: python3 scripts/test_served_ui_exact.py
       - name: Confirm package declares macOS 12
         run: grep -F '.macOS(.v12)' Package.swift
       - name: Validate release scripts

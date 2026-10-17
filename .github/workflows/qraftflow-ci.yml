@@ -134,7 +134,12 @@ jobs:
       - name: Install Linux test dependencies
         run: |
           apt-get update
-          apt-get install -y libsqlite3-dev zip unzip python3
+          apt-get install -y libsqlite3-dev zip unzip python3 python3-pip
+      - name: Install pinned offline-grade Python test dependencies
+        run: |
+          python3 -m pip install --no-cache-dir --disable-pip-version-check 'numpy==1.26.4' 'Pillow==10.4.0'
+          echo "QRAFTFLOW_GRADE_PYTHON=$(command -v python3)" >> "$GITHUB_ENV"
+          python3 -c 'import numpy,PIL; from PIL import ImageCms; print(numpy.__version__,PIL.__version__)'
       - name: Record Swift toolchain
         run: swift --version
       - name: Build
@@ -160,6 +165,14 @@ jobs:
           token: ${{ secrets.QRAFTFLOW_SOURCE_TOKEN }}
           persist-credentials: false
           fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned offline-grade Python test dependencies
+        run: |
+          python3 -m pip install --no-cache-dir --disable-pip-version-check 'numpy==1.26.4' 'Pillow==10.4.0'
+          echo "QRAFTFLOW_GRADE_PYTHON=$(command -v python3)" >> "$GITHUB_ENV"
+          python3 -c 'import numpy,PIL; from PIL import ImageCms; print(numpy.__version__,PIL.__version__)'
       - name: Record build environment
         run: |
           swift --version
@@ -195,6 +208,14 @@ jobs:
           APP='dist/QraftFlow Creator OS.app'
           test -x "$APP/Contents/MacOS/QraftFlow Creator OS"
           test -x "$APP/Contents/MacOS/qraftflow-local"
+          test -s "$APP/Contents/Resources/SkillResources/grade-images/skill-manifest.json"
+          cmp Sources/QraftFlowLocalServer/SkillResources/grade-images/skill-manifest.json \
+            "$APP/Contents/Resources/SkillResources/grade-images/skill-manifest.json"
+          test -s "$APP/Contents/Resources/SkillResources/grade-images/scripts/grade.py"
+          test -s "$APP/Contents/Resources/SkillResources/grade-images/scripts/grade_core.py"
+          test -s "$APP/Contents/Resources/SkillResources/grade-images/scripts/compare.py"
+          cmp Sources/QraftFlowLocalServer/SkillResources/grade-images/scripts/grade.py \
+            "$APP/Contents/Resources/SkillResources/grade-images/scripts/grade.py"
           test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = com.qt.qraftflow
           test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = 12.0
           "$APP/Contents/MacOS/QraftFlow Creator OS" --version

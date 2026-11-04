@@ -91,6 +91,8 @@ jobs:
           if(buttons.some(b=>!b.textContent))throw new Error('browser bootstrap failed: empty navigation label');
           console.log('browser bootstrap ok:',buttons.map(b=>b.textContent).join(' | '));
           NODE
+      - name: Validate Gate A web source regression
+        run: python3 scripts/test_gate_a_9852_web.py
       - name: Validate real browser auth and responsive connection behavior
         shell: bash
         run: |

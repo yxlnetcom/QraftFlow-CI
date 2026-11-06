@@ -146,6 +146,8 @@ jobs:
         run: swift --version
       - name: Build
         run: swift build
+      - name: Validate process-level External Agent Root MCP HTTP contract
+        run: python3 scripts/test_external_agent_root_mcp_http.py
       - name: Test regression suite
         run: swift test
       - name: Verify actual local server serves exact UI shell
